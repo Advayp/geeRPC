@@ -1,14 +1,33 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
+use snafu::Snafu;
+
+pub mod server;
+
+#[derive(Debug, Snafu)]
+pub enum Error {
+    #[snafu(display("Failed to bind to address: {}", source))]
+    BindFailed { source: std::io::Error },
+
+    #[snafu(display("Failed to accept connection: {}", source))]
+    AcceptFailed { source: std::io::Error },
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub type Result<T, E = Error> = std::result::Result<T, E>;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
+#[derive(Debug, Clone)]
+pub struct RpcStatus {
+    pub code: StatusCode,
+    pub message: String,
 }
+
+#[derive(Debug, Clone, Copy)]
+pub enum StatusCode {
+    Ok,
+    InvalidArgument,
+    NotFound,
+    DeadlineExceeded,
+    Unavailable,
+    Internal,
+}
+
+type ServiceName = String;
+type MethodName = String;
