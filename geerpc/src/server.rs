@@ -162,3 +162,327 @@ async fn handle_connection(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    // Helper function to create a test envelope
+    fn create_test_envelope(service: &str, method: &str, payload: Vec<u8>) -> RPCEnvelope {
+        RPCEnvelope {
+            version: 1,
+            request_id: 42,
+            service_name: service.to_string(),
+            method_name: method.to_string(),
+            status: None,
+            payload,
+        }
+    }
+
+    // Helper function to serialize an envelope into a frame with length prefix
+    fn serialize_frame(envelope: &RPCEnvelope) -> Vec<u8> {
+        let yaml = serde_yaml::to_string(envelope).unwrap();
+        let payload_bytes = yaml.as_bytes();
+        let length = payload_bytes.len() as u32;
+
+        let mut frame = Vec::new();
+        frame.extend_from_slice(&length.to_be_bytes());
+        frame.extend_from_slice(payload_bytes);
+        frame
+    }
+
+    // Helper function to deserialize a frame
+    async fn deserialize_frame(data: &[u8]) -> RPCEnvelope {
+        assert!(data.len() >= 4, "Frame too short");
+        let length = u32::from_be_bytes([data[0], data[1], data[2], data[3]]) as usize;
+        assert_eq!(data.len() - 4, length, "Length mismatch");
+
+        let yaml_data = &data[4..];
+        serde_yaml::from_slice(yaml_data).unwrap()
+    }
+
+    #[test]
+    fn test_envelope_serialization() {
+        let envelope = create_test_envelope("TestService", "TestMethod", vec![1, 2, 3, 4]);
+
+        // Test YAML serialization
+        let yaml = serde_yaml::to_string(&envelope).unwrap();
+        assert!(yaml.contains("TestService"));
+        assert!(yaml.contains("TestMethod"));
+
+        // Test deserialization
+        let deserialized: RPCEnvelope = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(deserialized.service_name, "TestService");
+        assert_eq!(deserialized.method_name, "TestMethod");
+        assert_eq!(deserialized.version, 1);
+        assert_eq!(deserialized.request_id, 42);
+        assert_eq!(deserialized.payload, vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_frame_serialization() {
+        let envelope = create_test_envelope("MyService", "MyMethod", vec![10, 20, 30]);
+        let frame = serialize_frame(&envelope);
+
+        // Check that frame has length prefix
+        assert!(frame.len() >= 4);
+        let length = u32::from_be_bytes([frame[0], frame[1], frame[2], frame[3]]) as usize;
+        assert_eq!(frame.len() - 4, length);
+    }
+
+    #[tokio::test]
+    async fn test_frame_deserialization() {
+        let envelope = create_test_envelope("Service1", "Method1", vec![5, 10, 15]);
+        let frame = serialize_frame(&envelope);
+
+        let deserialized = deserialize_frame(&frame).await;
+        assert_eq!(deserialized, envelope);
+    }
+
+    #[tokio::test]
+    async fn test_rpc_server_successful_call() {
+        // Create a server with a test handler
+        let mut server = RPCServer::new();
+        server.register_service(
+            "Calculator".to_string(),
+            "Add".to_string(),
+            Box::new(|payload: Vec<u8>| {
+                Box::pin(async move {
+                    // Simple handler that doubles the input
+                    let result: Vec<u8> = payload.iter().map(|x| x * 2).collect();
+                    Ok(result)
+                })
+            }),
+        );
+
+        // Start server in background
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handlers = Arc::new(server.handlers);
+
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let _ = handle_connection(stream, handlers).await;
+        });
+
+        // Give server time to start
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+        // Connect as client
+        let mut client = TcpStream::connect(addr).await.unwrap();
+
+        // Send request
+        let request = create_test_envelope("Calculator", "Add", vec![1, 2, 3]);
+        let request_frame = serialize_frame(&request);
+        client.write_all(&request_frame).await.unwrap();
+
+        // Read response
+        let mut length_buf = [0u8; 4];
+        client.read_exact(&mut length_buf).await.unwrap();
+        let length = u32::from_be_bytes(length_buf) as usize;
+
+        let mut response_buf = vec![0u8; length];
+        client.read_exact(&mut response_buf).await.unwrap();
+
+        let response: RPCEnvelope = serde_yaml::from_slice(&response_buf).unwrap();
+
+        // Verify response
+        assert_eq!(response.service_name, "Calculator");
+        assert_eq!(response.method_name, "Add");
+        assert_eq!(response.request_id, 42);
+        assert_eq!(response.payload, vec![2, 4, 6]); // Doubled
+        assert_eq!(response.status.as_ref().unwrap().code, StatusCode::Ok);
+    }
+
+    #[tokio::test]
+    async fn test_rpc_server_method_not_found() {
+        // Create server with no handlers
+        let server = RPCServer::new();
+
+        // Start server
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handlers = Arc::new(server.handlers);
+
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let _ = handle_connection(stream, handlers).await;
+        });
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+        // Connect and send request for non-existent method
+        let mut client = TcpStream::connect(addr).await.unwrap();
+        let request = create_test_envelope("Unknown", "Method", vec![1, 2, 3]);
+        let request_frame = serialize_frame(&request);
+        client.write_all(&request_frame).await.unwrap();
+
+        // Read response
+        let mut length_buf = [0u8; 4];
+        client.read_exact(&mut length_buf).await.unwrap();
+        let length = u32::from_be_bytes(length_buf) as usize;
+
+        let mut response_buf = vec![0u8; length];
+        client.read_exact(&mut response_buf).await.unwrap();
+
+        let response: RPCEnvelope = serde_yaml::from_slice(&response_buf).unwrap();
+
+        // Verify error response
+        assert_eq!(response.status.as_ref().unwrap().code, StatusCode::NotFound);
+        assert_eq!(
+            response.status.as_ref().unwrap().message,
+            "Method not found"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_multiple_requests() {
+        // Create server with handler
+        let mut server = RPCServer::new();
+        server.register_service(
+            "Echo".to_string(),
+            "echo".to_string(),
+            Box::new(|payload: Vec<u8>| Box::pin(async move { Ok(payload) })),
+        );
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handlers = Arc::new(server.handlers);
+
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let _ = handle_connection(stream, handlers).await;
+        });
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+        let mut client = TcpStream::connect(addr).await.unwrap();
+
+        // Send multiple requests
+        for i in 0..3 {
+            let request = RPCEnvelope {
+                version: 1,
+                request_id: i,
+                service_name: "Echo".to_string(),
+                method_name: "echo".to_string(),
+                status: None,
+                payload: vec![i as u8],
+            };
+
+            let request_frame = serialize_frame(&request);
+            client.write_all(&request_frame).await.unwrap();
+
+            // Read response
+            let mut length_buf = [0u8; 4];
+            client.read_exact(&mut length_buf).await.unwrap();
+            let length = u32::from_be_bytes(length_buf) as usize;
+
+            let mut response_buf = vec![0u8; length];
+            client.read_exact(&mut response_buf).await.unwrap();
+
+            let response: RPCEnvelope = serde_yaml::from_slice(&response_buf).unwrap();
+
+            assert_eq!(response.request_id, i);
+            assert_eq!(response.payload, vec![i as u8]);
+        }
+    }
+
+    #[test]
+    fn test_status_code_serialization() {
+        let status = RPCStatus {
+            code: StatusCode::Ok,
+            message: "Success".to_string(),
+        };
+
+        let yaml = serde_yaml::to_string(&status).unwrap();
+        let deserialized: RPCStatus = serde_yaml::from_str(&yaml).unwrap();
+
+        assert_eq!(deserialized.code, StatusCode::Ok);
+        assert_eq!(deserialized.message, "Success");
+    }
+
+    #[test]
+    fn test_all_status_codes() {
+        let codes = vec![
+            StatusCode::Ok,
+            StatusCode::InvalidArgument,
+            StatusCode::NotFound,
+            StatusCode::DeadlineExceeded,
+            StatusCode::Unavailable,
+            StatusCode::Internal,
+        ];
+
+        for code in codes {
+            let status = RPCStatus {
+                code,
+                message: "Test".to_string(),
+            };
+
+            let yaml = serde_yaml::to_string(&status).unwrap();
+            let deserialized: RPCStatus = serde_yaml::from_str(&yaml).unwrap();
+            assert_eq!(deserialized.code, code);
+        }
+    }
+
+    #[test]
+    fn test_large_payload_serialization() {
+        // Test with a large payload (but under MAX_FRAME_SIZE)
+        let large_payload: Vec<u8> = (0..10000).map(|x| (x % 256) as u8).collect();
+        let envelope = create_test_envelope("Service", "Method", large_payload.clone());
+
+        let frame = serialize_frame(&envelope);
+        assert!(frame.len() < MAX_FRAME_SIZE);
+
+        let length = u32::from_be_bytes([frame[0], frame[1], frame[2], frame[3]]) as usize;
+        assert_eq!(frame.len() - 4, length);
+    }
+
+    #[tokio::test]
+    async fn test_handler_error_response() {
+        // Create server with a handler that returns an error
+        let mut server = RPCServer::new();
+        server.register_service(
+            "Faulty".to_string(),
+            "error".to_string(),
+            Box::new(|_payload: Vec<u8>| {
+                Box::pin(async move {
+                    Err(RPCStatus {
+                        code: StatusCode::Internal,
+                        message: "Handler error".to_string(),
+                    })
+                })
+            }),
+        );
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handlers = Arc::new(server.handlers);
+
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let _ = handle_connection(stream, handlers).await;
+        });
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+        let mut client = TcpStream::connect(addr).await.unwrap();
+        let request = create_test_envelope("Faulty", "error", vec![]);
+        let request_frame = serialize_frame(&request);
+        client.write_all(&request_frame).await.unwrap();
+
+        // Read error response
+        let mut length_buf = [0u8; 4];
+        client.read_exact(&mut length_buf).await.unwrap();
+        let length = u32::from_be_bytes(length_buf) as usize;
+
+        let mut response_buf = vec![0u8; length];
+        client.read_exact(&mut response_buf).await.unwrap();
+
+        let response: RPCEnvelope = serde_yaml::from_slice(&response_buf).unwrap();
+
+        assert_eq!(response.status.as_ref().unwrap().code, StatusCode::Internal);
+        assert_eq!(response.status.as_ref().unwrap().message, "Handler error");
+    }
+}

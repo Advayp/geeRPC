@@ -31,13 +31,13 @@ pub enum Error {
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RPCStatus {
     pub code: StatusCode,
     pub message: String,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub enum StatusCode {
     Ok,
     InvalidArgument,
@@ -50,12 +50,12 @@ pub enum StatusCode {
 type ServiceName = String;
 type MethodName = String;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RPCEnvelope {
-    version: u8,
-    request_id: u64,
-    service_name: ServiceName,
-    method_name: MethodName,
-    status: Option<RPCStatus>,
-    payload: Vec<u8>,
+    pub version: u8,
+    pub request_id: u64,
+    pub service_name: ServiceName,
+    pub method_name: MethodName,
+    pub status: Option<RPCStatus>,
+    pub payload: Vec<u8>,
 }
