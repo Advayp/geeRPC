@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use snafu::Snafu;
 
+pub mod client;
 pub mod server;
 
 const MAX_FRAME_SIZE: usize = 8 * 1024 * 1024; // 8MB
@@ -53,7 +54,7 @@ type MethodName = String;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RPCEnvelope {
     pub version: u8,
-    pub request_id: u64,
+    pub sequence_number: u64,
     pub service_name: ServiceName,
     pub method_name: MethodName,
     pub status: Option<RPCStatus>,

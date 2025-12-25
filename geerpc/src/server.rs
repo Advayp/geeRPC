@@ -102,10 +102,14 @@ async fn write_frame(stream: &mut TcpStream, envelope: RPCEnvelope) -> Result<()
     Ok(())
 }
 
-async fn write_error_frame(stream: &mut TcpStream, error: RPCStatus) -> Result<()> {
+async fn write_error_frame(
+    stream: &mut TcpStream,
+    error: RPCStatus,
+    sequence_number: u64,
+) -> Result<()> {
     let envelope = RPCEnvelope {
         version: 1,
-        request_id: 0,
+        sequence_number,
         service_name: "".to_string(),
         method_name: "".to_string(),
         status: Some(error.clone()),
@@ -131,7 +135,7 @@ async fn handle_connection(
             let result = match result {
                 Ok(result) => result,
                 Err(e) => {
-                    return write_error_frame(&mut stream, e).await;
+                    return write_error_frame(&mut stream, e, envelope.sequence_number).await;
                 }
             };
 
@@ -139,7 +143,7 @@ async fn handle_connection(
                 &mut stream,
                 RPCEnvelope {
                     version: 1,
-                    request_id: envelope.request_id.clone(),
+                    sequence_number: envelope.sequence_number.clone(),
                     service_name: envelope.service_name.clone(),
                     method_name: envelope.method_name.clone(),
                     status: Some(RPCStatus {
@@ -157,6 +161,7 @@ async fn handle_connection(
                     code: StatusCode::NotFound,
                     message: "Method not found".to_string(),
                 },
+                envelope.sequence_number,
             )
             .await?;
         }
@@ -173,7 +178,7 @@ mod tests {
     fn create_test_envelope(service: &str, method: &str, payload: Vec<u8>) -> RPCEnvelope {
         RPCEnvelope {
             version: 1,
-            request_id: 42,
+            sequence_number: 42,
             service_name: service.to_string(),
             method_name: method.to_string(),
             status: None,
@@ -217,7 +222,7 @@ mod tests {
         assert_eq!(deserialized.service_name, "TestService");
         assert_eq!(deserialized.method_name, "TestMethod");
         assert_eq!(deserialized.version, 1);
-        assert_eq!(deserialized.request_id, 42);
+        assert_eq!(deserialized.sequence_number, 42);
         assert_eq!(deserialized.payload, vec![1, 2, 3, 4]);
     }
 
@@ -291,7 +296,7 @@ mod tests {
         // Verify response
         assert_eq!(response.service_name, "Calculator");
         assert_eq!(response.method_name, "Add");
-        assert_eq!(response.request_id, 42);
+        assert_eq!(response.sequence_number, 42);
         assert_eq!(response.payload, vec![2, 4, 6]); // Doubled
         assert_eq!(response.status.as_ref().unwrap().code, StatusCode::Ok);
     }
@@ -330,6 +335,7 @@ mod tests {
         let response: RPCEnvelope = serde_yaml::from_slice(&response_buf).unwrap();
 
         // Verify error response
+        assert_eq!(response.sequence_number, 42); // Must match request
         assert_eq!(response.status.as_ref().unwrap().code, StatusCode::NotFound);
         assert_eq!(
             response.status.as_ref().unwrap().message,
@@ -364,7 +370,7 @@ mod tests {
         for i in 0..3 {
             let request = RPCEnvelope {
                 version: 1,
-                request_id: i,
+                sequence_number: i,
                 service_name: "Echo".to_string(),
                 method_name: "echo".to_string(),
                 status: None,
@@ -384,7 +390,7 @@ mod tests {
 
             let response: RPCEnvelope = serde_yaml::from_slice(&response_buf).unwrap();
 
-            assert_eq!(response.request_id, i);
+            assert_eq!(response.sequence_number, i);
             assert_eq!(response.payload, vec![i as u8]);
         }
     }
@@ -482,6 +488,8 @@ mod tests {
 
         let response: RPCEnvelope = serde_yaml::from_slice(&response_buf).unwrap();
 
+        // Verify error response matches request sequence_number
+        assert_eq!(response.sequence_number, 42); // Must match request
         assert_eq!(response.status.as_ref().unwrap().code, StatusCode::Internal);
         assert_eq!(response.status.as_ref().unwrap().message, "Handler error");
     }
