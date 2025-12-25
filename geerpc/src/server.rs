@@ -43,16 +43,26 @@ impl RPCServer {
         let listener = TcpListener::bind(address).await.context(BindFailedSnafu)?;
         let handlers = Arc::new(self.handlers);
         tracing::info!("Server is running on {}", address);
+
         loop {
-            let (stream, _) = listener.accept().await.context(AcceptFailedSnafu)?;
-            tracing::info!("Accepted connection from {}", stream.peer_addr().unwrap());
-            let handlers = handlers.clone();
-            tokio::spawn(async move {
-                if let Err(e) = handle_connection(stream, handlers).await {
-                    tracing::error!("Error handling connection: {}", e);
+            tokio::select! {
+                result = listener.accept() => {
+                    let (stream, _) = result.context(AcceptFailedSnafu)?;
+                    tracing::info!("Accepted connection from {}", stream.peer_addr().unwrap());
+                    let handlers = handlers.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = handle_connection(stream, handlers).await {
+                            tracing::error!("Error handling connection: {}", e);
+                        }
+                    });
                 }
-            });
+                _ = tokio::signal::ctrl_c() => {
+                    tracing::info!("Shutting down server");
+                    break;
+                }
+            }
         }
+        Ok(())
     }
 
     pub fn register_service(&mut self, service: ServiceName, method: MethodName, handler: Handler) {
