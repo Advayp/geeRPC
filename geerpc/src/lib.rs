@@ -1,6 +1,9 @@
+use serde::{Deserialize, Serialize};
 use snafu::Snafu;
 
 pub mod server;
+
+const MAX_FRAME_SIZE: usize = 8 * 1024 * 1024; // 8MB
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -9,17 +12,32 @@ pub enum Error {
 
     #[snafu(display("Failed to accept connection: {}", source))]
     AcceptFailed { source: std::io::Error },
+
+    #[snafu(display("Failed to read from stream: {}", source))]
+    ReadFailed { source: std::io::Error },
+
+    #[snafu(display("Failed to write to stream: {}", source))]
+    WriteFailed { source: std::io::Error },
+
+    #[snafu(display("Frame {length} bytes exceeds the maximum size of {MAX_FRAME_SIZE} bytes"))]
+    FrameTooLarge { length: usize },
+
+    #[snafu(display("Failed to deserialize frame: {}", source))]
+    DeserializeFailed { source: serde_yaml::Error },
+
+    #[snafu(display("Failed to serialize frame: {}", source))]
+    SerializeFailed { source: serde_yaml::Error },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
-#[derive(Debug, Clone)]
-pub struct RpcStatus {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RPCStatus {
     pub code: StatusCode,
     pub message: String,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum StatusCode {
     Ok,
     InvalidArgument,
@@ -31,3 +49,13 @@ pub enum StatusCode {
 
 type ServiceName = String;
 type MethodName = String;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RPCEnvelope {
+    version: u8,
+    request_id: u64,
+    service_name: ServiceName,
+    method_name: MethodName,
+    status: Option<RPCStatus>,
+    payload: Vec<u8>,
+}
