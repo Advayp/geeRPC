@@ -1,11 +1,16 @@
 // Note: This test file uses internal APIs via the internal-testing feature
 // These APIs are not part of the public interface
+#[cfg(feature = "internal-testing")]
 use geerpc::client::{RPCClient, RPCClientBuilder};
 #[cfg(feature = "internal-testing")]
 use geerpc::handle_connection;
+#[cfg(feature = "internal-testing")]
 use geerpc::server::RPCServer;
+#[cfg(feature = "internal-testing")]
 use std::sync::Arc;
+#[cfg(feature = "internal-testing")]
 use std::time::Duration;
+#[cfg(feature = "internal-testing")]
 use tokio::time::sleep;
 
 // Helper function to setup server on random port
@@ -30,19 +35,15 @@ async fn setup_server(server: RPCServer) -> String {
 }
 
 // Helper to create client with read loop running
+#[cfg(feature = "internal-testing")]
 async fn create_client_with_read_loop(addr: String) -> Arc<RPCClient> {
-    let client = Arc::new(RPCClientBuilder::new().address(addr).build().await.unwrap());
-
-    let read_client = Arc::clone(&client);
-    tokio::spawn(async move {
-        let _ = read_client.read_loop().await;
-    });
-
+    let client = RPCClientBuilder::new().address(addr).build().await.unwrap();
     sleep(Duration::from_millis(20)).await;
     client
 }
 
 #[tokio::test]
+#[cfg(feature = "internal-testing")]
 async fn test_e2e_simple_echo() {
     // Setup server with echo service
     let mut server = RPCServer::new();
@@ -61,6 +62,7 @@ async fn test_e2e_simple_echo() {
 }
 
 #[tokio::test]
+#[cfg(feature = "internal-testing")]
 async fn test_e2e_multiple_services() {
     // Setup server with multiple services
     let mut server = RPCServer::new();
@@ -133,6 +135,7 @@ async fn test_e2e_multiple_services() {
 }
 
 #[tokio::test]
+#[cfg(feature = "internal-testing")]
 async fn test_e2e_concurrent_calls_single_client() {
     // Setup server with a service that has a delay
     let mut server = RPCServer::new();
@@ -174,6 +177,7 @@ async fn test_e2e_concurrent_calls_single_client() {
 }
 
 #[tokio::test]
+#[cfg(feature = "internal-testing")]
 async fn test_e2e_concurrent_calls_multiple_services() {
     // Setup server with multiple services
     let mut server = RPCServer::new();
@@ -263,6 +267,7 @@ async fn test_e2e_concurrent_calls_multiple_services() {
 }
 
 #[tokio::test]
+#[cfg(feature = "internal-testing")]
 async fn test_e2e_high_concurrency() {
     // Setup server
     let mut server = RPCServer::new();
@@ -302,6 +307,7 @@ async fn test_e2e_high_concurrency() {
 }
 
 #[tokio::test]
+#[cfg(feature = "internal-testing")]
 async fn test_e2e_interleaved_calls() {
     // Setup server with fast and slow services
     let mut server = RPCServer::new();
@@ -362,6 +368,7 @@ async fn test_e2e_interleaved_calls() {
 }
 
 #[tokio::test]
+#[cfg(feature = "internal-testing")]
 async fn test_e2e_large_payload() {
     // Setup server
     let mut server = RPCServer::new();
@@ -393,6 +400,7 @@ async fn test_e2e_large_payload() {
 }
 
 #[tokio::test]
+#[cfg(feature = "internal-testing")]
 async fn test_e2e_mixed_payload_sizes() {
     // Setup server
     let mut server = RPCServer::new();

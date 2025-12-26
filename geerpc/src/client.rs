@@ -51,20 +51,33 @@ impl RPCClientBuilder {
         self
     }
 
-    pub async fn build(self) -> Result<RPCClient> {
+    pub async fn build(self) -> Result<Arc<RPCClient>> {
         if self.address.is_none() {
             return Err(Error::AddressRequired);
         }
-        let stream = TcpStream::connect(self.address.unwrap())
+        let address = self.address.unwrap();
+        tracing::info!("Attempting to connect to server at {}", address);
+        let stream = TcpStream::connect(&address)
             .await
             .context(ConnectFailedSnafu)?;
+        tracing::info!("Successfully connected to server at {}", address);
         let (read_half, write_half) = tokio::io::split(stream);
-        Ok(RPCClient {
+        let client = Arc::new(RPCClient {
             read_half: Arc::new(Mutex::new(read_half)),
             write_half: Arc::new(Mutex::new(write_half)),
             next_sequence_number: Arc::new(Mutex::new(1)),
             pending_requests: Arc::new(Mutex::new(HashMap::new())),
-        })
+        });
+
+        // Spawn the read loop automatically
+        let read_client = client.clone();
+        tokio::spawn(async move {
+            if let Err(e) = read_client.read_loop().await {
+                tracing::error!("Read loop error: {}", e);
+            }
+        });
+
+        Ok(client)
     }
 }
 
@@ -94,6 +107,13 @@ impl RPCClient {
             *n += 1;
             result
         };
+        tracing::info!(
+            "Calling RPC: service={}, method={}, seq={}, payload_size={}",
+            service,
+            method,
+            sequence_number,
+            payload.len()
+        );
         let (tx, rx) = oneshot::channel::<Vec<u8>>();
         self.pending_requests
             .lock()
@@ -107,26 +127,51 @@ impl RPCClient {
             payload,
         )
         .await?;
-        Ok(rx.await.context(RecvFailedSnafu)?)
+        tracing::info!("Request sent: seq={}", sequence_number);
+        let result = rx.await.context(RecvFailedSnafu)?;
+        tracing::info!(
+            "Response received: seq={}, response_size={}",
+            sequence_number,
+            result.len()
+        );
+        Ok(result)
     }
 
-    pub async fn read_loop(&self) -> Result<()> {
+    pub(crate) async fn read_loop(&self) -> Result<()> {
+        tracing::info!("Starting client read loop");
         let mut read_half = self.read_half.lock().await;
         loop {
             let frame = match read_raw_frame(&mut *read_half).await {
                 Ok(frame) => frame,
-                Err(_e) => break,
+                Err(e) => {
+                    tracing::info!("Read loop ending: {}", e);
+                    break;
+                }
             };
             let envelope: RPCEnvelope =
                 bincode::deserialize(&frame).context(DeserializeFailedSnafu)?;
             let sequence_number = envelope.sequence_number;
+            tracing::info!(
+                "Received response frame: seq={}, service={}, method={}",
+                sequence_number,
+                envelope.service_name,
+                envelope.method_name
+            );
             let tx = self.pending_requests.lock().await.remove(&sequence_number);
             if let Some(tx) = tx {
+                tracing::info!(
+                    "Matched response to pending request: seq={}",
+                    sequence_number
+                );
                 tx.send(envelope.payload)
                     .map_err(|_| SendFailedSnafu.build())?;
+            } else {
+                tracing::info!("No pending request found for seq={}", sequence_number);
             }
         }
 
+        let pending_count = self.pending_requests.lock().await.len();
+        tracing::info!("Cleaning up {} pending requests", pending_count);
         let mut pending = self.pending_requests.lock().await;
         for (_, tx) in pending.drain() {
             tx.send(Vec::new()).map_err(|_| SendFailedSnafu.build())?;

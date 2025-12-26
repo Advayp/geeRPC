@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = [ "app","geerpc"]
+members = ["sample-client","sample-server","geerpc"]
 
 [workspace.dependencies]
 snafu = "0.8.9"
@@ -9,3 +9,4 @@ tracing = "0.1.41"
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
 serde = { version = "1.0", features = ["derive"] }
 bincode = "1.3"
+async-trait = "0.1"

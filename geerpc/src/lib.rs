@@ -51,6 +51,9 @@ pub enum Error {
 
     #[snafu(display("Failed to send response to channel"))]
     SendFailed,
+
+    #[snafu(display("Connection closed by peer"))]
+    ConnectionClosed,
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -102,10 +105,17 @@ where
     R: AsyncReadExt + Unpin,
 {
     let mut buffer = [0; 4];
-    stream
-        .read_exact(&mut buffer)
-        .await
-        .context(ReadFailedSnafu)?;
+    match stream.read_exact(&mut buffer).await {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+            return Err(Error::ConnectionClosed);
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => {
+            return Err(Error::ConnectionClosed);
+        }
+        Err(e) => return Err(Error::ReadFailed { source: e }),
+    }
+
     let length = u32::from_be_bytes(buffer) as usize;
 
     if length > MAX_FRAME_SIZE {
@@ -113,9 +123,28 @@ where
     }
 
     let mut buffer = vec![0; length];
-    stream
-        .read_exact(&mut buffer)
-        .await
-        .context(ReadFailedSnafu)?;
+    match stream.read_exact(&mut buffer).await {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+            return Err(Error::ConnectionClosed);
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => {
+            return Err(Error::ConnectionClosed);
+        }
+        Err(e) => return Err(Error::ReadFailed { source: e }),
+    }
     Ok(buffer)
+}
+
+pub fn encode_payload<T: Serialize>(payload: T) -> Result<Vec<u8>> {
+    let payload = bincode::serialize(&payload).context(SerializeFailedSnafu)?;
+    Ok(payload)
+}
+
+pub fn decode_payload<T>(payload: Vec<u8>) -> Result<T>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    let payload = bincode::deserialize(&payload).context(DeserializeFailedSnafu)?;
+    Ok(payload)
 }

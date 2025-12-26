@@ -3,13 +3,14 @@
 version = 4
 
 [[package]]
-name = "app"
-version = "0.1.0"
+name = "async-trait"
+version = "0.1.89"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9035ad2d096bed7955a320ee7e2230574d28fd3c3a0f186cbea1ff3c7eed5dbb"
 dependencies = [
- "geerpc",
- "tokio",
- "tracing",
- "tracing-subscriber",
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -170,6 +171,34 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5407465600fb0548f1442edf71dd20683c6ed326200ace4b1ef0763521bb3b77"
 dependencies = [
  "bitflags",
+]
+
+[[package]]
+name = "sample-client"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bincode",
+ "geerpc",
+ "serde",
+ "snafu",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "sample-server"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bincode",
+ "geerpc",
+ "serde",
+ "snafu",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

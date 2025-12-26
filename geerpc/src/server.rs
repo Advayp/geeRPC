@@ -46,8 +46,9 @@ impl RPCServer {
                     tracing::info!("Accepted connection from {}", stream.peer_addr().unwrap());
                     let handlers = handlers.clone();
                     tokio::spawn(async move {
+                        let peer_addr = stream.peer_addr().ok();
                         if let Err(e) = handle_connection(stream, handlers).await {
-                            tracing::error!("Error handling connection: {}", e);
+                            tracing::warn!("Error handling connection from {:?}: {}", peer_addr, e);
                         }
                     });
                 }
@@ -89,18 +90,58 @@ pub async fn handle_connection(
     mut stream: TcpStream,
     handlers: Arc<HashMap<(ServiceName, MethodName), Handler>>,
 ) -> Result<()> {
+    let peer_addr = stream.peer_addr().ok();
+    tracing::info!("Starting connection handler for {:?}", peer_addr);
+
     loop {
-        let frame = read_raw_frame(&mut stream).await?;
+        let frame = match read_raw_frame(&mut stream).await {
+            Ok(frame) => frame,
+            Err(crate::Error::ConnectionClosed) => {
+                tracing::info!("Connection closed gracefully from {:?}", peer_addr);
+                return Ok(());
+            }
+            Err(e) => {
+                tracing::info!("Connection error from {:?}: {}", peer_addr, e);
+                return Err(e);
+            }
+        };
         let envelope: RPCEnvelope = bincode::deserialize(&frame).context(DeserializeFailedSnafu)?;
+
+        tracing::info!(
+            "Received request: service={}, method={}, seq={}, payload_size={}",
+            envelope.service_name,
+            envelope.method_name,
+            envelope.sequence_number,
+            envelope.payload.len()
+        );
 
         let handler = handlers.get(&(envelope.service_name.clone(), envelope.method_name.clone()));
 
         if let Some(handler) = handler {
+            tracing::info!(
+                "Found handler for {}.{}, executing...",
+                envelope.service_name,
+                envelope.method_name
+            );
             let result = handler(envelope.payload).await;
 
             let result = match result {
-                Ok(result) => result,
+                Ok(result) => {
+                    tracing::info!(
+                        "Handler succeeded for {}.{}, response_size={}",
+                        envelope.service_name,
+                        envelope.method_name,
+                        result.len()
+                    );
+                    result
+                }
                 Err(e) => {
+                    tracing::info!(
+                        "Handler returned error for {}.{}: {:?}",
+                        envelope.service_name,
+                        envelope.method_name,
+                        e
+                    );
                     return write_error_frame(&mut stream, e, envelope.sequence_number).await;
                 }
             };
@@ -120,7 +161,18 @@ pub async fn handle_connection(
                 },
             )
             .await?;
+            tracing::info!(
+                "Response sent for {}.{}, seq={}",
+                envelope.service_name,
+                envelope.method_name,
+                envelope.sequence_number
+            );
         } else {
+            tracing::info!(
+                "Handler not found for {}.{}",
+                envelope.service_name,
+                envelope.method_name
+            );
             write_error_frame(
                 &mut stream,
                 RPCStatus {
@@ -457,5 +509,55 @@ mod tests {
         assert_eq!(response.sequence_number, 42); // Must match request
         assert_eq!(response.status.as_ref().unwrap().code, StatusCode::Internal);
         assert_eq!(response.status.as_ref().unwrap().message, "Handler error");
+    }
+
+    #[tokio::test]
+    async fn test_graceful_client_disconnect() {
+        // Create server with echo service
+        let mut server = RPCServer::new();
+        server.register_service(
+            "Echo".to_string(),
+            "echo".to_string(),
+            Box::new(|payload: Vec<u8>| Box::pin(async move { Ok(payload) })),
+        );
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handlers = Arc::new(server.handlers);
+
+        // Spawn server that should not panic or error when client disconnects
+        let server_handle = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            // This should return Ok(()) when client disconnects gracefully
+            handle_connection(stream, handlers).await
+        });
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+        // Connect and send one request
+        let mut client = TcpStream::connect(addr).await.unwrap();
+        let request = create_test_envelope("Echo", "echo", vec![1, 2, 3]);
+        let request_frame = serialize_frame(&request);
+        client.write_all(&request_frame).await.unwrap();
+
+        // Read response
+        let mut length_buf = [0u8; 4];
+        client.read_exact(&mut length_buf).await.unwrap();
+        let length = u32::from_be_bytes(length_buf) as usize;
+        let mut response_buf = vec![0u8; length];
+        client.read_exact(&mut response_buf).await.unwrap();
+
+        // Close the client connection gracefully
+        drop(client);
+
+        // Wait for server to handle the disconnect
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+        // Server should have returned Ok(()) from handle_connection
+        let result = server_handle.await.unwrap();
+        assert!(
+            result.is_ok(),
+            "Server should handle graceful disconnect without error"
+        );
     }
 }
