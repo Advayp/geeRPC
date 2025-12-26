@@ -91,8 +91,7 @@ pub async fn handle_connection(
 ) -> Result<()> {
     loop {
         let frame = read_raw_frame(&mut stream).await?;
-        let envelope: RPCEnvelope =
-            serde_yaml::from_slice(&frame).context(DeserializeFailedSnafu)?;
+        let envelope: RPCEnvelope = bincode::deserialize(&frame).context(DeserializeFailedSnafu)?;
 
         let handler = handlers.get(&(envelope.service_name.clone(), envelope.method_name.clone()));
 
@@ -157,13 +156,12 @@ mod tests {
 
     // Helper function to serialize an envelope into a frame with length prefix
     fn serialize_frame(envelope: &RPCEnvelope) -> Vec<u8> {
-        let yaml = serde_yaml::to_string(envelope).unwrap();
-        let payload_bytes = yaml.as_bytes();
+        let payload_bytes = bincode::serialize(envelope).unwrap();
         let length = payload_bytes.len() as u32;
 
         let mut frame = Vec::new();
         frame.extend_from_slice(&length.to_be_bytes());
-        frame.extend_from_slice(payload_bytes);
+        frame.extend_from_slice(&payload_bytes);
         frame
     }
 
@@ -173,21 +171,19 @@ mod tests {
         let length = u32::from_be_bytes([data[0], data[1], data[2], data[3]]) as usize;
         assert_eq!(data.len() - 4, length, "Length mismatch");
 
-        let yaml_data = &data[4..];
-        serde_yaml::from_slice(yaml_data).unwrap()
+        let payload_data = &data[4..];
+        bincode::deserialize(payload_data).unwrap()
     }
 
     #[test]
     fn test_envelope_serialization() {
         let envelope = create_test_envelope("TestService", "TestMethod", vec![1, 2, 3, 4]);
 
-        // Test YAML serialization
-        let yaml = serde_yaml::to_string(&envelope).unwrap();
-        assert!(yaml.contains("TestService"));
-        assert!(yaml.contains("TestMethod"));
+        // Test bincode serialization
+        let serialized = bincode::serialize(&envelope).unwrap();
 
         // Test deserialization
-        let deserialized: RPCEnvelope = serde_yaml::from_str(&yaml).unwrap();
+        let deserialized: RPCEnvelope = bincode::deserialize(&serialized).unwrap();
         assert_eq!(deserialized.service_name, "TestService");
         assert_eq!(deserialized.method_name, "TestMethod");
         assert_eq!(deserialized.version, 1);
@@ -260,7 +256,7 @@ mod tests {
         let mut response_buf = vec![0u8; length];
         client.read_exact(&mut response_buf).await.unwrap();
 
-        let response: RPCEnvelope = serde_yaml::from_slice(&response_buf).unwrap();
+        let response: RPCEnvelope = bincode::deserialize(&response_buf).unwrap();
 
         // Verify response
         assert_eq!(response.service_name, "Calculator");
@@ -301,7 +297,7 @@ mod tests {
         let mut response_buf = vec![0u8; length];
         client.read_exact(&mut response_buf).await.unwrap();
 
-        let response: RPCEnvelope = serde_yaml::from_slice(&response_buf).unwrap();
+        let response: RPCEnvelope = bincode::deserialize(&response_buf).unwrap();
 
         // Verify error response
         assert_eq!(response.sequence_number, 42); // Must match request
@@ -357,7 +353,7 @@ mod tests {
             let mut response_buf = vec![0u8; length];
             client.read_exact(&mut response_buf).await.unwrap();
 
-            let response: RPCEnvelope = serde_yaml::from_slice(&response_buf).unwrap();
+            let response: RPCEnvelope = bincode::deserialize(&response_buf).unwrap();
 
             assert_eq!(response.sequence_number, i);
             assert_eq!(response.payload, vec![i as u8]);
@@ -371,8 +367,8 @@ mod tests {
             message: "Success".to_string(),
         };
 
-        let yaml = serde_yaml::to_string(&status).unwrap();
-        let deserialized: RPCStatus = serde_yaml::from_str(&yaml).unwrap();
+        let serialized = bincode::serialize(&status).unwrap();
+        let deserialized: RPCStatus = bincode::deserialize(&serialized).unwrap();
 
         assert_eq!(deserialized.code, StatusCode::Ok);
         assert_eq!(deserialized.message, "Success");
@@ -395,8 +391,8 @@ mod tests {
                 message: "Test".to_string(),
             };
 
-            let yaml = serde_yaml::to_string(&status).unwrap();
-            let deserialized: RPCStatus = serde_yaml::from_str(&yaml).unwrap();
+            let serialized = bincode::serialize(&status).unwrap();
+            let deserialized: RPCStatus = bincode::deserialize(&serialized).unwrap();
             assert_eq!(deserialized.code, code);
         }
     }
@@ -455,7 +451,7 @@ mod tests {
         let mut response_buf = vec![0u8; length];
         client.read_exact(&mut response_buf).await.unwrap();
 
-        let response: RPCEnvelope = serde_yaml::from_slice(&response_buf).unwrap();
+        let response: RPCEnvelope = bincode::deserialize(&response_buf).unwrap();
 
         // Verify error response matches request sequence_number
         assert_eq!(response.sequence_number, 42); // Must match request

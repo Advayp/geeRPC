@@ -33,10 +33,10 @@ pub enum Error {
     FrameTooLarge { length: usize },
 
     #[snafu(display("Failed to deserialize frame: {}", source))]
-    DeserializeFailed { source: serde_yaml::Error },
+    DeserializeFailed { source: bincode::Error },
 
     #[snafu(display("Failed to serialize frame: {}", source))]
-    SerializeFailed { source: serde_yaml::Error },
+    SerializeFailed { source: bincode::Error },
 
     #[snafu(display("Failed to connect to address: {}", source))]
     ConnectFailed { source: std::io::Error },
@@ -88,9 +88,7 @@ pub(crate) async fn write_frame<W>(stream: &mut W, envelope: RPCEnvelope) -> Res
 where
     W: AsyncWriteExt + Unpin,
 {
-    let frame = serde_yaml::to_string(&envelope)
-        .context(SerializeFailedSnafu)?
-        .into_bytes();
+    let frame = bincode::serialize(&envelope).context(SerializeFailedSnafu)?;
     let length = frame.len();
     let mut buffer = vec![0; 4];
     buffer[0..4].copy_from_slice(&(length as u32).to_be_bytes());

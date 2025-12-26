@@ -118,7 +118,7 @@ impl RPCClient {
                 Err(_e) => break,
             };
             let envelope: RPCEnvelope =
-                serde_yaml::from_slice(&frame).context(DeserializeFailedSnafu)?;
+                bincode::deserialize(&frame).context(DeserializeFailedSnafu)?;
             let sequence_number = envelope.sequence_number;
             let tx = self.pending_requests.lock().await.remove(&sequence_number);
             if let Some(tx) = tx {
