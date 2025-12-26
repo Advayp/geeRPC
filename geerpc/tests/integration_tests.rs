@@ -1,15 +1,17 @@
+// Note: This test file uses internal APIs via the internal-testing feature
+// These APIs are not part of the public interface
 use geerpc::client::{RPCClient, RPCClientBuilder};
-use geerpc::server::RPCServer;
+#[cfg(feature = "internal-testing")]
 use geerpc::handle_connection;
+use geerpc::server::RPCServer;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
 
 // Helper function to setup server on random port
+#[cfg(feature = "internal-testing")]
 async fn setup_server(server: RPCServer) -> String {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let handlers = Arc::new(server.handlers);
 
@@ -29,13 +31,7 @@ async fn setup_server(server: RPCServer) -> String {
 
 // Helper to create client with read loop running
 async fn create_client_with_read_loop(addr: String) -> Arc<RPCClient> {
-    let client = Arc::new(
-        RPCClientBuilder::new()
-            .address(addr)
-            .build()
-            .await
-            .unwrap(),
-    );
+    let client = Arc::new(RPCClientBuilder::new().address(addr).build().await.unwrap());
 
     let read_client = Arc::clone(&client);
     tokio::spawn(async move {
@@ -68,7 +64,7 @@ async fn test_e2e_simple_echo() {
 async fn test_e2e_multiple_services() {
     // Setup server with multiple services
     let mut server = RPCServer::new();
-    
+
     // Echo service
     server.register_service(
         "Echo".to_string(),
@@ -129,7 +125,10 @@ async fn test_e2e_multiple_services() {
     assert_eq!(result, vec![10]);
 
     // Test String.Reverse
-    let result = client.call("String", "Reverse", vec![1, 2, 3, 4, 5]).await.unwrap();
+    let result = client
+        .call("String", "Reverse", vec![1, 2, 3, 4, 5])
+        .await
+        .unwrap();
     assert_eq!(result, vec![5, 4, 3, 2, 1]);
 }
 
@@ -178,7 +177,7 @@ async fn test_e2e_concurrent_calls_single_client() {
 async fn test_e2e_concurrent_calls_multiple_services() {
     // Setup server with multiple services
     let mut server = RPCServer::new();
-    
+
     server.register_service(
         "ServiceA".to_string(),
         "method".to_string(),
@@ -217,7 +216,7 @@ async fn test_e2e_concurrent_calls_multiple_services() {
 
     // Make concurrent calls to different services
     let mut handles = vec![];
-    
+
     // ServiceA calls
     for i in 0..5 {
         let client_clone = client.clone();
@@ -306,7 +305,7 @@ async fn test_e2e_high_concurrency() {
 async fn test_e2e_interleaved_calls() {
     // Setup server with fast and slow services
     let mut server = RPCServer::new();
-    
+
     server.register_service(
         "Fast".to_string(),
         "method".to_string(),
@@ -335,10 +334,7 @@ async fn test_e2e_interleaved_calls() {
     // Start slow call first
     let client_slow = client.clone();
     let slow_handle = tokio::spawn(async move {
-        let result = client_slow
-            .call("Slow", "method", vec![5])
-            .await
-            .unwrap();
+        let result = client_slow.call("Slow", "method", vec![5]).await.unwrap();
         assert_eq!(result, vec![15]);
     });
 
@@ -350,10 +346,7 @@ async fn test_e2e_interleaved_calls() {
     for i in 0..5 {
         let client_fast = client.clone();
         let handle = tokio::spawn(async move {
-            let result = client_fast
-                .call("Fast", "method", vec![i])
-                .await
-                .unwrap();
+            let result = client_fast.call("Fast", "method", vec![i]).await.unwrap();
             assert_eq!(result, vec![i * 2]);
         });
         fast_handles.push(handle);
@@ -393,11 +386,8 @@ async fn test_e2e_large_payload() {
     let mut expected = large_payload.clone();
     expected.reverse();
 
-    let result = client
-        .call("Data", "process", large_payload)
-        .await
-        .unwrap();
-    
+    let result = client.call("Data", "process", large_payload).await.unwrap();
+
     assert_eq!(result.len(), 1_000_000);
     assert_eq!(result, expected);
 }
@@ -417,7 +407,7 @@ async fn test_e2e_mixed_payload_sizes() {
 
     // Make concurrent calls with different payload sizes
     let mut handles = vec![];
-    
+
     for size in [1, 10, 100, 1000, 10000, 100000].iter() {
         let client_clone = client.clone();
         let size = *size;
@@ -437,4 +427,3 @@ async fn test_e2e_mixed_payload_sizes() {
         handle.await.unwrap();
     }
 }
-

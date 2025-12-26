@@ -7,6 +7,10 @@ use tokio::io::AsyncWriteExt;
 pub mod client;
 pub mod server;
 
+// Re-export internal functions for testing purposes only
+// This is not part of the public API and should not be used by library consumers
+#[doc(hidden)]
+#[cfg(any(test, feature = "internal-testing"))]
 pub use server::handle_connection;
 
 const MAX_FRAME_SIZE: usize = 8 * 1024 * 1024; // 8MB

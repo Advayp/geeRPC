@@ -81,6 +81,10 @@ async fn write_error_frame(
     write_frame(stream, envelope).await
 }
 
+// This function is internal but exposed for integration testing
+// It should not be used directly by library consumers
+#[cfg_attr(not(any(test, feature = "internal-testing")), allow(dead_code))]
+#[cfg_attr(any(test, feature = "internal-testing"), doc(hidden))]
 pub async fn handle_connection(
     mut stream: TcpStream,
     handlers: Arc<HashMap<(ServiceName, MethodName), Handler>>,
