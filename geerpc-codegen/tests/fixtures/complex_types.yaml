@@ -1,0 +1,13 @@
+service: DataService
+methods:
+  ProcessData:
+    request:
+      data: Vec<u8>
+      metadata: Option<String>
+      count: u64
+      active: bool
+    response:
+      result: Vec<String>
+      error: Option<String>
+      processed: usize
+

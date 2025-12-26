@@ -1,0 +1,8 @@
+service: Ping
+methods:
+  Ping:
+    request:
+      message: String
+    response:
+      message: String
+

@@ -1,0 +1,21 @@
+service: User
+methods:
+  GetUser:
+    request:
+      id: u64
+    response:
+      name: String
+      email: String
+  CreateUser:
+    request:
+      name: String
+      email: String
+    response:
+      id: u64
+      success: bool
+  DeleteUser:
+    request:
+      id: u64
+    response:
+      success: bool
+

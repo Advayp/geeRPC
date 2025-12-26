@@ -1,11 +1,15 @@
 use serde::{Deserialize, Serialize};
-use snafu::Snafu;
 use snafu::prelude::*;
+use snafu::Snafu;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 
 pub mod client;
 pub mod server;
+
+// Re-export the code generation macro
+#[doc(inline)]
+pub use geerpc_codegen::rpc_gen;
 
 // Re-export internal functions for testing purposes only
 // This is not part of the public API and should not be used by library consumers

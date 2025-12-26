@@ -1,0 +1,13 @@
+service: Database
+methods:
+  Query:
+    request:
+      table: String
+      filter: String
+      limit: u32
+      offset: u32
+    response:
+      rows: Vec<String>
+      count: u64
+      has_more: bool
+

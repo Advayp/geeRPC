@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["sample-client","sample-server","geerpc"]
+members = ["sample-client","sample-server","geerpc","geerpc-codegen"]
 
 [workspace.dependencies]
 snafu = "0.8.9"
