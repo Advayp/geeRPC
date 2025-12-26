@@ -1,24 +1,19 @@
 use crate::AcceptFailedSnafu;
 use crate::BindFailedSnafu;
 use crate::DeserializeFailedSnafu;
-use crate::FrameTooLargeSnafu;
-use crate::MAX_FRAME_SIZE;
 use crate::MethodName;
 use crate::RPCEnvelope;
 use crate::RPCStatus;
-use crate::ReadFailedSnafu;
 use crate::Result;
-use crate::SerializeFailedSnafu;
 use crate::ServiceName;
 use crate::StatusCode;
-use crate::WriteFailedSnafu;
+use crate::read_raw_frame;
+use crate::write_frame;
 use snafu::prelude::*;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use tokio::io::AsyncReadExt;
-use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 
@@ -29,7 +24,7 @@ type Handler = Box<
 >;
 
 pub struct RPCServer {
-    handlers: HashMap<(ServiceName, MethodName), Handler>,
+    pub handlers: HashMap<(ServiceName, MethodName), Handler>,
 }
 
 impl RPCServer {
@@ -70,38 +65,6 @@ impl RPCServer {
     }
 }
 
-async fn read_raw_frame(stream: &mut TcpStream) -> Result<Vec<u8>> {
-    let mut buffer = [0; 4];
-    stream
-        .read_exact(&mut buffer)
-        .await
-        .context(ReadFailedSnafu)?;
-    let length = u32::from_be_bytes(buffer) as usize;
-
-    if length > MAX_FRAME_SIZE {
-        return Err(FrameTooLargeSnafu { length }.build());
-    }
-
-    let mut buffer = vec![0; length];
-    stream
-        .read_exact(&mut buffer)
-        .await
-        .context(ReadFailedSnafu)?;
-    Ok(buffer)
-}
-
-async fn write_frame(stream: &mut TcpStream, envelope: RPCEnvelope) -> Result<()> {
-    let frame = serde_yaml::to_string(&envelope)
-        .context(SerializeFailedSnafu)?
-        .into_bytes();
-    let length = frame.len();
-    let mut buffer = vec![0; 4];
-    buffer[0..4].copy_from_slice(&(length as u32).to_be_bytes());
-    stream.write_all(&buffer).await.context(WriteFailedSnafu)?;
-    stream.write_all(&frame).await.context(WriteFailedSnafu)?;
-    Ok(())
-}
-
 async fn write_error_frame(
     stream: &mut TcpStream,
     error: RPCStatus,
@@ -118,7 +81,7 @@ async fn write_error_frame(
     write_frame(stream, envelope).await
 }
 
-async fn handle_connection(
+pub async fn handle_connection(
     mut stream: TcpStream,
     handlers: Arc<HashMap<(ServiceName, MethodName), Handler>>,
 ) -> Result<()> {
@@ -170,6 +133,8 @@ async fn handle_connection(
 
 #[cfg(test)]
 mod tests {
+    use crate::MAX_FRAME_SIZE;
+
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
