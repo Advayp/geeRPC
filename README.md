@@ -186,6 +186,48 @@ Run integration tests:
 cargo test --package geerpc
 ```
 
+## Performance
+
+geeRPC has been extensively benchmarked to evaluate its performance characteristics. Below are key highlights from our comprehensive benchmark suite.
+
+### Key Performance Metrics
+
+**Latency (End-to-End Round Trip):**
+
+- Small payloads (~100 bytes): **43.6 µs**
+- Medium payloads (~10 KB): **67.8 µs**
+- Large payloads (~1 MB): **2.65 ms**
+
+**Throughput (Sequential):**
+
+- Small payloads: **~23,000 req/s**
+- Medium payloads: **~14,700 req/s**
+- Large payloads: **~380 req/s**
+
+**Concurrent Throughput (100 in-flight requests):**
+
+- Small payloads: **~200,000 req/s**
+- Medium payloads: **~172,000 req/s**
+- Large payloads: **~1,645 req/s**
+
+**Concurrency Scaling:**
+
+- Small payloads maintain stable ~480-500 µs latency even with 100 concurrent requests
+- Medium payloads show improved latency with concurrency (2.85ms → 582µs)
+- Server-side concurrent processing enables efficient parallel request handling
+
+### Comparison with gRPC
+
+| Metric                                    | geeRPC             | gRPC (C++/Go)    | gRPC (Rust/tonic) |
+| ----------------------------------------- | ------------------ | ---------------- | ----------------- |
+| **Small Payload Latency**                 | **43.6 µs**        | ~50-200 µs       | ~100-500 µs       |
+| **Large Payload Latency**                 | **2.65 ms**        | ~5-10 ms         | ~5-10 ms          |
+| **Small Payload Throughput (Sequential)** | **~23,000 req/s**  | ~100k-500k req/s | ~50k-200k req/s   |
+| **Small Payload Throughput (Concurrent)** | **~200,000 req/s** | ~500k-1M req/s   | ~200k-500k req/s  |
+| **Large Payload Throughput**              | **~380 req/s**     | ~1k-10k req/s    | ~1k-10k req/s     |
+
+For detailed benchmark results and analysis, see [BENCHMARK_REPORT.md](BENCHMARK_REPORT.md).
+
 ## Dependencies
 
 - **tokio**: Async runtime
