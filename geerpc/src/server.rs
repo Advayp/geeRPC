@@ -1,3 +1,5 @@
+use crate::read_raw_frame;
+use crate::write_frame;
 use crate::AcceptFailedSnafu;
 use crate::BindFailedSnafu;
 use crate::DeserializeFailedSnafu;
@@ -7,15 +9,15 @@ use crate::RPCStatus;
 use crate::Result;
 use crate::ServiceName;
 use crate::StatusCode;
-use crate::read_raw_frame;
-use crate::write_frame;
 use snafu::prelude::*;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use tokio::io::{ReadHalf, WriteHalf};
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
+use tokio::sync::mpsc;
 
 type Handler = Box<
     dyn Fn(Vec<u8>) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, RPCStatus>> + Send>>
@@ -66,11 +68,10 @@ impl RPCServer {
     }
 }
 
-async fn write_error_frame(
-    stream: &mut TcpStream,
-    error: RPCStatus,
-    sequence_number: u64,
-) -> Result<()> {
+async fn write_error_frame<W>(stream: &mut W, error: RPCStatus, sequence_number: u64) -> Result<()>
+where
+    W: tokio::io::AsyncWriteExt + Unpin,
+{
     let envelope = RPCEnvelope {
         version: 1,
         sequence_number,
@@ -87,25 +88,59 @@ async fn write_error_frame(
 #[cfg_attr(not(any(test, feature = "internal-testing")), allow(dead_code))]
 #[cfg_attr(any(test, feature = "internal-testing"), doc(hidden))]
 pub async fn handle_connection(
-    mut stream: TcpStream,
+    stream: TcpStream,
     handlers: Arc<HashMap<(ServiceName, MethodName), Handler>>,
 ) -> Result<()> {
     let peer_addr = stream.peer_addr().ok();
     tracing::info!("Starting connection handler for {:?}", peer_addr);
 
+    // Split stream into read and write halves for concurrent processing
+    let (read_half, write_half) = tokio::io::split(stream);
+    let write_half = Arc::new(tokio::sync::Mutex::new(write_half));
+
+    // Channel to send responses from handler tasks to the writer task
+    let (response_tx, mut response_rx) = mpsc::unbounded_channel::<RPCEnvelope>();
+
+    // Spawn writer task that writes responses as they complete
+    let write_half_clone = write_half.clone();
+    let peer_addr_clone = peer_addr;
+    let writer_handle = tokio::spawn(async move {
+        while let Some(envelope) = response_rx.recv().await {
+            let mut write = write_half_clone.lock().await;
+            if let Err(e) = write_frame(&mut *write, envelope.clone()).await {
+                tracing::warn!("Error writing response for {:?}: {}", peer_addr_clone, e);
+                break;
+            }
+        }
+    });
+
+    // Main loop: read frames and spawn handler tasks
+    let mut read_half = read_half;
     loop {
-        let frame = match read_raw_frame(&mut stream).await {
+        let frame = match read_raw_frame(&mut read_half).await {
             Ok(frame) => frame,
             Err(crate::Error::ConnectionClosed) => {
                 tracing::info!("Connection closed gracefully from {:?}", peer_addr);
+                drop(response_tx); // Close channel to signal writer to stop
+                let _ = writer_handle.await;
                 return Ok(());
             }
             Err(e) => {
                 tracing::info!("Connection error from {:?}: {}", peer_addr, e);
+                drop(response_tx); // Close channel to signal writer to stop
+                let _ = writer_handle.await;
                 return Err(e);
             }
         };
-        let envelope: RPCEnvelope = bincode::deserialize(&frame).context(DeserializeFailedSnafu)?;
+
+        let envelope: RPCEnvelope =
+            match bincode::deserialize(&frame).context(DeserializeFailedSnafu) {
+                Ok(e) => e,
+                Err(e) => {
+                    tracing::warn!("Failed to deserialize frame from {:?}: {}", peer_addr, e);
+                    continue;
+                }
+            };
 
         tracing::info!(
             "Received request: service={}, method={}, seq={}, payload_size={}",
@@ -115,73 +150,107 @@ pub async fn handle_connection(
             envelope.payload.len()
         );
 
-        let handler = handlers.get(&(envelope.service_name.clone(), envelope.method_name.clone()));
+        // Check if handler exists using references (no clone needed for check)
+        let handler_exists = handlers
+            .get(&(envelope.service_name.clone(), envelope.method_name.clone()))
+            .is_some();
 
-        if let Some(handler) = handler {
-            tracing::info!(
-                "Found handler for {}.{}, executing...",
-                envelope.service_name,
-                envelope.method_name
-            );
-            let result = handler(envelope.payload).await;
+        if handler_exists {
+            // Move fields from envelope into the task (no need to clone before check)
+            let service_name = envelope.service_name;
+            let method_name = envelope.method_name;
+            let sequence_number = envelope.sequence_number;
+            let payload = envelope.payload;
+            let handlers_clone = handlers.clone();
+            let response_tx = response_tx.clone();
+            let peer_addr_for_task = peer_addr;
 
-            let result = match result {
-                Ok(result) => {
+            // Spawn a task to handle this request concurrently
+            tokio::spawn(async move {
+                // Get handler from the cloned handlers map
+                let handler = handlers_clone.get(&(service_name.clone(), method_name.clone()));
+                if let Some(handler) = handler {
                     tracing::info!(
-                        "Handler succeeded for {}.{}, response_size={}",
-                        envelope.service_name,
-                        envelope.method_name,
-                        result.len()
+                        "Found handler for {}.{}, executing...",
+                        service_name,
+                        method_name
                     );
-                    result
-                }
-                Err(e) => {
-                    tracing::info!(
-                        "Handler returned error for {}.{}: {:?}",
-                        envelope.service_name,
-                        envelope.method_name,
-                        e
-                    );
-                    return write_error_frame(&mut stream, e, envelope.sequence_number).await;
-                }
-            };
+                    let result = handler(payload).await;
 
-            write_frame(
-                &mut stream,
-                RPCEnvelope {
-                    version: 1,
-                    sequence_number: envelope.sequence_number.clone(),
-                    service_name: envelope.service_name.clone(),
-                    method_name: envelope.method_name.clone(),
-                    status: Some(RPCStatus {
-                        code: StatusCode::Ok,
-                        message: "Success".to_string(),
-                    }),
-                    payload: result,
-                },
-            )
-            .await?;
-            tracing::info!(
-                "Response sent for {}.{}, seq={}",
-                envelope.service_name,
-                envelope.method_name,
-                envelope.sequence_number
-            );
+                    let response_envelope = match result {
+                        Ok(result) => {
+                            tracing::info!(
+                                "Handler succeeded for {}.{}, response_size={}",
+                                service_name,
+                                method_name,
+                                result.len()
+                            );
+                            RPCEnvelope {
+                                version: 1,
+                                sequence_number,
+                                service_name: service_name.clone(),
+                                method_name: method_name.clone(),
+                                status: Some(RPCStatus {
+                                    code: StatusCode::Ok,
+                                    message: "Success".to_string(),
+                                }),
+                                payload: result,
+                            }
+                        }
+                        Err(e) => {
+                            tracing::info!(
+                                "Handler returned error for {}.{}: {:?}",
+                                service_name,
+                                method_name,
+                                e
+                            );
+                            // Create error response envelope
+                            RPCEnvelope {
+                                version: 1,
+                                sequence_number,
+                                service_name: service_name.clone(),
+                                method_name: method_name.clone(),
+                                status: Some(e),
+                                payload: Vec::new(),
+                            }
+                        }
+                    };
+
+                    // Send response to writer task
+                    if response_tx.send(response_envelope).is_err() {
+                        tracing::warn!(
+                            "Failed to send response to writer task for {:?}",
+                            peer_addr_for_task
+                        );
+                    }
+                }
+            });
         } else {
+            // Handler not found - send error response through channel
             tracing::info!(
                 "Handler not found for {}.{}",
                 envelope.service_name,
                 envelope.method_name
             );
-            write_error_frame(
-                &mut stream,
-                RPCStatus {
+            let error_envelope = RPCEnvelope {
+                version: 1,
+                sequence_number: envelope.sequence_number,
+                service_name: envelope.service_name,
+                method_name: envelope.method_name,
+                status: Some(RPCStatus {
                     code: StatusCode::NotFound,
                     message: "Method not found".to_string(),
-                },
-                envelope.sequence_number,
-            )
-            .await?;
+                }),
+                payload: Vec::new(),
+            };
+            if response_tx.send(error_envelope).is_err() {
+                tracing::warn!("Failed to send error response for {:?}", peer_addr);
+                drop(response_tx);
+                let _ = writer_handle.await;
+                return Err(crate::Error::WriteFailed {
+                    source: std::io::Error::new(std::io::ErrorKind::BrokenPipe, "Channel closed"),
+                });
+            }
         }
     }
 }

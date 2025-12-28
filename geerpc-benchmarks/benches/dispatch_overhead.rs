@@ -112,8 +112,6 @@ async fn setup_dispatch_overhead_small() -> Result<
         }
     });
 
-    tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-
     let server_handle = common::ServerHandle {
         shutdown_tx: Some(shutdown_tx),
         handle: server_handle_task,
@@ -197,8 +195,6 @@ async fn setup_dispatch_overhead_medium() -> Result<
         }
     });
 
-    tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-
     let server_handle = common::ServerHandle {
         shutdown_tx: Some(shutdown_tx),
         handle: server_handle_task,
@@ -279,8 +275,6 @@ async fn setup_dispatch_overhead_large() -> Result<
             }
         }
     });
-
-    tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
 
     let server_handle = common::ServerHandle {
         shutdown_tx: Some(shutdown_tx),

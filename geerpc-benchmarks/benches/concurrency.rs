@@ -66,16 +66,16 @@ async fn bench_concurrency_small_inner(
         }
     });
 
-    // Give server a moment to start
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
     let server_handle = common::ServerHandle {
         shutdown_tx: Some(shutdown_tx),
         handle: server_handle_task,
-        address: addr,
+        address: addr.clone(),
     };
 
-    let client_addr = server_handle.address().to_string();
+    // Create a single client that will handle all concurrent requests
+    let client = bench_small::BenchSmallClient::try_new(addr).await?;
+    let client = std::sync::Arc::new(client);
+
     let request = bench_small::EchoRequest {
         message: generate_small_payload(),
     };
@@ -83,39 +83,11 @@ async fn bench_concurrency_small_inner(
     let start = Instant::now();
     let mut handles = Vec::new();
 
-    // Create clients with better staggering to avoid overwhelming the server
-    // Use a semaphore to limit concurrent connections (more conservative)
-    let max_connections = num_concurrent.min(30).max(5);
-    let connection_limit = std::sync::Arc::new(tokio::sync::Semaphore::new(max_connections));
-
-    for i in 0..num_concurrent {
-        let client_addr = client_addr.clone();
+    // Make multiple concurrent requests using the same client
+    for _ in 0..num_concurrent {
+        let client = client.clone();
         let request = request.clone();
-        let semaphore = connection_limit.clone();
-        let num_conc = num_concurrent; // Capture for use in closure
         let handle = tokio::spawn(async move {
-            // Stagger connections more aggressively to avoid connection backlog
-            if i > 0 {
-                let delay = (i % 10) as u64 * 10; // 0-90ms delay, more spread out
-                tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
-            }
-
-            // Limit concurrent connections
-            let _permit = semaphore.acquire().await.unwrap();
-
-            let client = match bench_small::BenchSmallClient::try_new(client_addr).await {
-                Ok(c) => c,
-                Err(e) => {
-                    eprintln!("Failed to create client: {}", e);
-                    return Duration::ZERO;
-                }
-            };
-
-            // Give the client's read loop more time to start and stabilize
-            // Longer delay for higher concurrency to ensure connections are stable
-            let delay_ms = if num_conc > 100 { 200 } else { 100 };
-            tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
-
             let req_start = Instant::now();
             match client.echo(black_box(request)).await {
                 Ok(_response) => req_start.elapsed(),
@@ -157,9 +129,6 @@ async fn bench_concurrency_small_inner(
     let p50 = calculate_percentiles(&latencies, 50.0);
     let p95 = calculate_percentiles(&latencies, 95.0);
     let p99 = calculate_percentiles(&latencies, 99.0);
-
-    // Give a moment for any remaining responses to be processed
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
     server_handle.shutdown().await;
 
@@ -249,16 +218,16 @@ async fn bench_concurrency_medium_inner(
         }
     });
 
-    // Give server a moment to start
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
     let server_handle = common::ServerHandle {
         shutdown_tx: Some(shutdown_tx),
         handle: server_handle_task,
-        address: addr,
+        address: addr.clone(),
     };
 
-    let client_addr = server_handle.address().to_string();
+    // Create a single client that will handle all concurrent requests
+    let client = bench_medium::BenchMediumClient::try_new(addr).await?;
+    let client = std::sync::Arc::new(client);
+
     let request = bench_medium::EchoRequest {
         data: generate_medium_payload(),
     };
@@ -266,34 +235,11 @@ async fn bench_concurrency_medium_inner(
     let start = Instant::now();
     let mut handles = Vec::new();
 
-    // Use a semaphore to limit concurrent connections
-    let connection_limit = std::sync::Arc::new(tokio::sync::Semaphore::new(50));
-
-    for i in 0..num_concurrent {
-        let client_addr = client_addr.clone();
+    // Make multiple concurrent requests using the same client
+    for _ in 0..num_concurrent {
+        let client = client.clone();
         let request = request.clone();
-        let semaphore = connection_limit.clone();
         let handle = tokio::spawn(async move {
-            // Stagger connections
-            if i > 0 {
-                let delay = (i % 20) as u64 * 5;
-                tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
-            }
-
-            // Limit concurrent connections
-            let _permit = semaphore.acquire().await.unwrap();
-
-            let client = match bench_medium::BenchMediumClient::try_new(client_addr).await {
-                Ok(c) => c,
-                Err(e) => {
-                    eprintln!("Failed to create client: {}", e);
-                    return Duration::ZERO;
-                }
-            };
-
-            // Give the client's read loop time to start
-            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-
             let req_start = Instant::now();
             match client.echo(black_box(request)).await {
                 Ok(_response) => req_start.elapsed(),
@@ -335,9 +281,6 @@ async fn bench_concurrency_medium_inner(
     let p50 = calculate_percentiles(&latencies, 50.0);
     let p95 = calculate_percentiles(&latencies, 95.0);
     let p99 = calculate_percentiles(&latencies, 99.0);
-
-    // Give a moment for any remaining responses to be processed
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
     server_handle.shutdown().await;
 
@@ -427,18 +370,17 @@ async fn bench_concurrency_large_inner(
         }
     });
 
-    // Give server a moment to start
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
     let server_handle = common::ServerHandle {
         shutdown_tx: Some(shutdown_tx),
         handle: server_handle_task,
-        address: addr,
+        address: addr.clone(),
     };
 
-    let (items, metadata) = generate_large_payload();
+    // Create a single client that will handle all concurrent requests
+    let client = bench_large::BenchLargeClient::try_new(addr).await?;
+    let client = std::sync::Arc::new(client);
 
-    let client_addr = server_handle.address().to_string();
+    let (items, metadata) = generate_large_payload();
     let request = bench_large::EchoRequest {
         items: items.clone(),
         metadata: metadata.clone(),
@@ -447,34 +389,11 @@ async fn bench_concurrency_large_inner(
     let start = Instant::now();
     let mut handles = Vec::new();
 
-    // Use a semaphore to limit concurrent connections
-    let connection_limit = std::sync::Arc::new(tokio::sync::Semaphore::new(50));
-
-    for i in 0..num_concurrent {
-        let client_addr = client_addr.clone();
+    // Make multiple concurrent requests using the same client
+    for _ in 0..num_concurrent {
+        let client = client.clone();
         let request = request.clone();
-        let semaphore = connection_limit.clone();
         let handle = tokio::spawn(async move {
-            // Stagger connections
-            if i > 0 {
-                let delay = (i % 20) as u64 * 5;
-                tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
-            }
-
-            // Limit concurrent connections
-            let _permit = semaphore.acquire().await.unwrap();
-
-            let client = match bench_large::BenchLargeClient::try_new(client_addr).await {
-                Ok(c) => c,
-                Err(e) => {
-                    eprintln!("Failed to create client: {}", e);
-                    return Duration::ZERO;
-                }
-            };
-
-            // Give the client's read loop time to start
-            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-
             let req_start = Instant::now();
             match client.echo(black_box(request)).await {
                 Ok(_response) => req_start.elapsed(),
@@ -516,9 +435,6 @@ async fn bench_concurrency_large_inner(
     let p50 = calculate_percentiles(&latencies, 50.0);
     let p95 = calculate_percentiles(&latencies, 95.0);
     let p99 = calculate_percentiles(&latencies, 99.0);
-
-    // Give a moment for any remaining responses to be processed
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
     server_handle.shutdown().await;
 

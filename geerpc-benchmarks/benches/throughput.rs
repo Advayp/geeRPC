@@ -1,4 +1,4 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use std::time::Instant;
 use tokio::runtime::Runtime;
 
@@ -57,9 +57,10 @@ impl bench_large::BenchLargeService for EchoLargeService {
     }
 }
 
-async fn bench_throughput_small_inner(
-    num_requests: usize,
-) -> Result<f64, Box<dyn std::error::Error + Send + Sync>> {
+async fn setup_throughput_small() -> Result<
+    (common::ServerHandle, bench_small::BenchSmallClient),
+    Box<dyn std::error::Error + Send + Sync>,
+> {
     let service = EchoSmallService;
     let mut server = geerpc::server::RPCServer::new();
     bench_small::BenchSmallServer::new(service).register(&mut server);
@@ -93,56 +94,56 @@ async fn bench_throughput_small_inner(
         }
     });
 
-    // Give server a moment to start
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-    
     let server_handle = common::ServerHandle {
         shutdown_tx: Some(shutdown_tx),
         handle: server_handle_task,
-        address: addr,
+        address: addr.clone(),
     };
 
-    let client = bench_small::BenchSmallClient::try_new(server_handle.address().to_string())
-        .await?;
+    let client = bench_small::BenchSmallClient::try_new(addr).await?;
 
-    let request = bench_small::EchoRequest {
-        message: generate_small_payload(),
-    };
-
-    let start = Instant::now();
-    for _ in 0..num_requests {
-        let _response = client.echo(black_box(request.clone())).await?;
-    }
-    let elapsed = start.elapsed();
-    let throughput = num_requests as f64 / elapsed.as_secs_f64();
-
-    server_handle.shutdown().await;
-    
-    Ok(throughput)
+    Ok((server_handle, client))
 }
 
 fn bench_throughput_small(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
+    let (server_handle, client) = rt.block_on(setup_throughput_small()).unwrap();
+    let client = std::sync::Arc::new(client);
+
     let mut group = c.benchmark_group("throughput_small");
-    
+
     for num_requests in [100, 1000, 10000].iter() {
         group.bench_with_input(
             BenchmarkId::from_parameter(num_requests),
             num_requests,
             |b, &num_requests| {
-                b.to_async(&rt).iter(|| async {
-                    let throughput = bench_throughput_small_inner(num_requests).await.unwrap();
-                    criterion::black_box(throughput);
+                b.to_async(&rt).iter(|| {
+                    let client = client.clone();
+                    async move {
+                        let request = bench_small::EchoRequest {
+                            message: generate_small_payload(),
+                        };
+                        let start = Instant::now();
+                        for _ in 0..num_requests {
+                            let _response = client.echo(black_box(request.clone())).await.unwrap();
+                        }
+                        let elapsed = start.elapsed();
+                        let throughput = num_requests as f64 / elapsed.as_secs_f64();
+                        criterion::black_box(throughput);
+                    }
                 });
             },
         );
     }
     group.finish();
+
+    rt.block_on(server_handle.shutdown());
 }
 
-async fn bench_throughput_medium_inner(
-    num_requests: usize,
-) -> Result<f64, Box<dyn std::error::Error + Send + Sync>> {
+async fn setup_throughput_medium() -> Result<
+    (common::ServerHandle, bench_medium::BenchMediumClient),
+    Box<dyn std::error::Error + Send + Sync>,
+> {
     let service = EchoMediumService;
     let mut server = geerpc::server::RPCServer::new();
     bench_medium::BenchMediumServer::new(service).register(&mut server);
@@ -176,56 +177,56 @@ async fn bench_throughput_medium_inner(
         }
     });
 
-    // Give server a moment to start
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-    
     let server_handle = common::ServerHandle {
         shutdown_tx: Some(shutdown_tx),
         handle: server_handle_task,
-        address: addr,
+        address: addr.clone(),
     };
 
-    let client = bench_medium::BenchMediumClient::try_new(server_handle.address().to_string())
-        .await?;
+    let client = bench_medium::BenchMediumClient::try_new(addr).await?;
 
-    let request = bench_medium::EchoRequest {
-        data: generate_medium_payload(),
-    };
-
-    let start = Instant::now();
-    for _ in 0..num_requests {
-        let _response = client.echo(black_box(request.clone())).await?;
-    }
-    let elapsed = start.elapsed();
-    let throughput = num_requests as f64 / elapsed.as_secs_f64();
-
-    server_handle.shutdown().await;
-    
-    Ok(throughput)
+    Ok((server_handle, client))
 }
 
 fn bench_throughput_medium(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
+    let (server_handle, client) = rt.block_on(setup_throughput_medium()).unwrap();
+    let client = std::sync::Arc::new(client);
+
     let mut group = c.benchmark_group("throughput_medium");
-    
+
     for num_requests in [100, 1000, 5000].iter() {
         group.bench_with_input(
             BenchmarkId::from_parameter(num_requests),
             num_requests,
             |b, &num_requests| {
-                b.to_async(&rt).iter(|| async {
-                    let throughput = bench_throughput_medium_inner(num_requests).await.unwrap();
-                    criterion::black_box(throughput);
+                b.to_async(&rt).iter(|| {
+                    let client = client.clone();
+                    async move {
+                        let request = bench_medium::EchoRequest {
+                            data: generate_medium_payload(),
+                        };
+                        let start = Instant::now();
+                        for _ in 0..num_requests {
+                            let _response = client.echo(black_box(request.clone())).await.unwrap();
+                        }
+                        let elapsed = start.elapsed();
+                        let throughput = num_requests as f64 / elapsed.as_secs_f64();
+                        criterion::black_box(throughput);
+                    }
                 });
             },
         );
     }
     group.finish();
+
+    rt.block_on(server_handle.shutdown());
 }
 
-async fn bench_throughput_large_inner(
-    num_requests: usize,
-) -> Result<f64, Box<dyn std::error::Error + Send + Sync>> {
+async fn setup_throughput_large() -> Result<
+    (common::ServerHandle, bench_large::BenchLargeClient),
+    Box<dyn std::error::Error + Send + Sync>,
+> {
     let service = EchoLargeService;
     let mut server = geerpc::server::RPCServer::new();
     bench_large::BenchLargeServer::new(service).register(&mut server);
@@ -259,54 +260,49 @@ async fn bench_throughput_large_inner(
         }
     });
 
-    // Give server a moment to start
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-    
     let server_handle = common::ServerHandle {
         shutdown_tx: Some(shutdown_tx),
         handle: server_handle_task,
-        address: addr,
-    };
-    
-    let (items, metadata) = generate_large_payload();
-
-    let client = bench_large::BenchLargeClient::try_new(server_handle.address().to_string())
-        .await?;
-
-    let request = bench_large::EchoRequest {
-        items: items.clone(),
-        metadata: metadata.clone(),
+        address: addr.clone(),
     };
 
-    let start = Instant::now();
-    for _ in 0..num_requests {
-        let _response = client.echo(black_box(request.clone())).await?;
-    }
-    let elapsed = start.elapsed();
-    let throughput = num_requests as f64 / elapsed.as_secs_f64();
+    let client = bench_large::BenchLargeClient::try_new(addr).await?;
 
-    server_handle.shutdown().await;
-    
-    Ok(throughput)
+    Ok((server_handle, client))
 }
 
 fn bench_throughput_large(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
+    let (server_handle, client) = rt.block_on(setup_throughput_large()).unwrap();
+    let client = std::sync::Arc::new(client);
+
     let mut group = c.benchmark_group("throughput_large");
-    
+
     for num_requests in [10, 50, 100].iter() {
         group.bench_with_input(
             BenchmarkId::from_parameter(num_requests),
             num_requests,
             |b, &num_requests| {
-                b.to_async(&rt).iter(|| async {
-                    let throughput = bench_throughput_large_inner(num_requests).await.unwrap();
-                    criterion::black_box(throughput);
+                b.to_async(&rt).iter(|| {
+                    let client = client.clone();
+                    async move {
+                        let (items, metadata) = generate_large_payload();
+                        let request = bench_large::EchoRequest { items, metadata };
+                        let start = Instant::now();
+                        for _ in 0..num_requests {
+                            let _response = client.echo(black_box(request.clone())).await.unwrap();
+                        }
+                        let elapsed = start.elapsed();
+                        let throughput = num_requests as f64 / elapsed.as_secs_f64();
+                        criterion::black_box(throughput);
+                    }
                 });
             },
         );
     }
     group.finish();
+
+    rt.block_on(server_handle.shutdown());
 }
 
 criterion_group!(
@@ -316,4 +312,3 @@ criterion_group!(
     bench_throughput_large
 );
 criterion_main!(benches);
-

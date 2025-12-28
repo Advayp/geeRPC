@@ -102,9 +102,6 @@ async fn setup_latency_small() -> Result<
         address: addr.clone(),
     };
 
-    // Small delay just to ensure listener is ready (much less than 100ms)
-    tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-
     let client = bench_small::BenchSmallClient::try_new(addr).await?;
 
     Ok((server_handle, client))
@@ -177,8 +174,6 @@ async fn setup_latency_medium() -> Result<
         address: addr.clone(),
     };
 
-    tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-
     let client = bench_medium::BenchMediumClient::try_new(addr).await?;
 
     Ok((server_handle, client))
@@ -249,8 +244,6 @@ async fn setup_latency_large() -> Result<
         handle: server_handle_task,
         address: addr.clone(),
     };
-
-    tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
 
     let client = bench_large::BenchLargeClient::try_new(addr).await?;
 
