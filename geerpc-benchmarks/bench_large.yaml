@@ -1,0 +1,10 @@
+service: BenchLarge
+methods:
+  Echo:
+    request:
+      items: Vec<Vec<u8>>
+      metadata: String
+    response:
+      items: Vec<Vec<u8>>
+      metadata: String
+

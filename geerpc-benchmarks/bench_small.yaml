@@ -1,0 +1,7 @@
+service: BenchSmall
+methods:
+  Echo:
+    request:
+      message: String
+    response:
+      message: String
