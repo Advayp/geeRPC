@@ -165,6 +165,12 @@ impl LatencyStats {
     }
 }
 
+impl Default for LatencyStats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Throughput calculator
 pub struct ThroughputCalculator {
     start: Instant,
@@ -195,5 +201,11 @@ impl ThroughputCalculator {
     pub fn reset(&mut self) {
         self.start = Instant::now();
         self.count = 0;
+    }
+}
+
+impl Default for ThroughputCalculator {
+    fn default() -> Self {
+        Self::new()
     }
 }

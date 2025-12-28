@@ -81,6 +81,12 @@ impl RPCClientBuilder {
     }
 }
 
+impl Default for RPCClientBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 async fn write_frame_with_metadata(
     write_half: &mut WriteHalf<TcpStream>,
     sequence_number: u64,

@@ -14,7 +14,6 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use tokio::io::{ReadHalf, WriteHalf};
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
@@ -68,19 +67,10 @@ impl RPCServer {
     }
 }
 
-async fn write_error_frame<W>(stream: &mut W, error: RPCStatus, sequence_number: u64) -> Result<()>
-where
-    W: tokio::io::AsyncWriteExt + Unpin,
-{
-    let envelope = RPCEnvelope {
-        version: 1,
-        sequence_number,
-        service_name: "".to_string(),
-        method_name: "".to_string(),
-        status: Some(error.clone()),
-        payload: Vec::new(),
-    };
-    write_frame(stream, envelope).await
+impl Default for RPCServer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // This function is internal but exposed for integration testing
